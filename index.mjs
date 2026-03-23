@@ -7,14 +7,14 @@ import {
   REST,
   Routes,
   SlashCommandBuilder,
-  Events
+  Events,
+  EmbedBuilder
 } from 'discord.js';
 
 import cron from 'node-cron';
 import { setupServer } from './setup-server.mjs';
 import { postInitialMessages } from './post-messages.mjs';
 import { fetchMoodleTasks } from './moodle-sync.mjs';
-import { EmbedBuilder } from 'discord.js';
 
 const client = new Client({
   intents: [
@@ -27,56 +27,21 @@ const client = new Client({
 const sentAlerts = new Set();
 
 const commands = [
-  new SlashCommandBuilder()
-    .setName('ajuda')
-    .setDescription('Mostra os comandos disponíveis do SONIBOT'),
-
-  new SlashCommandBuilder()
-    .setName('ping')
-    .setDescription('Verifica se o SONIBOT está online'),
-
-  new SlashCommandBuilder()
-    .setName('setup')
-    .setDescription('Cria a estrutura do servidor SONICOS'),
-
-  new SlashCommandBuilder()
-    .setName('postar-mensagens')
-    .setDescription('Posta as mensagens iniciais do servidor'),
-
-  new SlashCommandBuilder()
-    .setName('tarefas')
-    .setDescription('Mostra as próximas tarefas do Moodle'),
-
-  new SlashCommandBuilder()
-    .setName('hoje')
-    .setDescription('Mostra as tarefas que vencem hoje'),
-
-  new SlashCommandBuilder()
-    .setName('semana')
-    .setDescription('Mostra as tarefas que vencem nesta semana'),
+  new SlashCommandBuilder().setName('ajuda').setDescription('Mostra os comandos disponíveis'),
+  new SlashCommandBuilder().setName('ping').setDescription('Verifica se o bot está online'),
+  new SlashCommandBuilder().setName('setup').setDescription('Cria a estrutura do servidor'),
+  new SlashCommandBuilder().setName('postar-mensagens').setDescription('Posta mensagens iniciais'),
+  new SlashCommandBuilder().setName('tarefas').setDescription('Mostra as próximas tarefas'),
+  new SlashCommandBuilder().setName('hoje').setDescription('Mostra tarefas de hoje'),
+  new SlashCommandBuilder().setName('semana').setDescription('Mostra tarefas da semana'),
 
   new SlashCommandBuilder()
     .setName('aviso')
-    .setDescription('Publica um aviso no canal de anúncios')
-    .addStringOption(option =>
-      option
-        .setName('materia')
-        .setDescription('Nome da matéria')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option
-        .setName('titulo')
-        .setDescription('Título do aviso')
-        .setRequired(true)
-    )
-    .addStringOption(option =>
-      option
-        .setName('mensagem')
-        .setDescription('Mensagem do aviso')
-        .setRequired(true)
-    )
-].map(command => command.toJSON());
+    .setDescription('Publica um aviso')
+    .addStringOption(o => o.setName('materia').setRequired(true))
+    .addStringOption(o => o.setName('titulo').setRequired(true))
+    .addStringOption(o => o.setName('mensagem').setRequired(true))
+].map(c => c.toJSON());
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -89,8 +54,32 @@ async function registerCommands() {
     { body: commands }
   );
 
-  console.log('✅ Comandos registrados com sucesso.');
+  console.log('✅ Comandos registrados.');
 }
+
+// ================= UTIL =================
+
+function isToday(date) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const tomorrow = new Date(today);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+
+  const target = new Date(date);
+
+  return target >= today && target < tomorrow;
+}
+
+function isThisWeek(date) {
+  const now = new Date();
+  const target = new Date(date);
+
+  const diffDays = (target - now) / (1000 * 60 * 60 * 24);
+  return diffDays >= 0 && diffDays <= 7;
+}
+
+// ================= EMBEDS =================
 
 function createTaskEmbed(task) {
   return new EmbedBuilder()
@@ -103,264 +92,180 @@ function createTaskEmbed(task) {
     )
     .setDescription(task.description?.substring(0, 200) || 'Sem descrição')
     .setFooter({ text: 'SONIBOT • Sistema Acadêmico' });
-
 }
 
 function formatTask(task) {
   return `📚 **${task.title}**
-🕒 Data: ${task.dueDate ? new Date(task.dueDate).toLocaleString('pt-BR') : 'Sem data'}
-📝 Descrição: ${task.description ? task.description.substring(0, 200) : 'Sem descrição'}`;
+🕒 ${new Date(task.dueDate).toLocaleString('pt-BR')}
+📝 ${task.description?.substring(0, 100) || 'Sem descrição'}`;
 }
 
-if (interaction.commandName === 'hoje') {
-  await interaction.deferReply({ ephemeral: true });
-
-  const tasks = await fetchMoodleTasks();
-  const todayTasks = tasks.filter(task => isToday(task.dueDate));
-
-  if (!todayTasks.length) {
-    await interaction.editReply('📭 Nenhuma tarefa vence hoje.');
-    return;
-  }
-
-  const embeds = todayTasks.slice(0, 5).map(task => createTaskEmbed(task));
-
-  await interaction.editReply({
-    content: '📚 Atividades que vencem hoje:',
-    embeds
-  });
-}
-
-function isThisWeek(date) {
-  const now = new Date();
-  const target = new Date(date);
-  const diffMs = target - now;
-  const diffDays = diffMs / (1000 * 60 * 60 * 24);
-
-  return diffDays >= 0 && diffDays <= 7;
-}
+// ================= ALERTAS =================
 
 async function checkDeadlinesAndNotify(clientInstance) {
   try {
     const guild = clientInstance.guilds.cache.get(process.env.GUILD_ID);
-    if (!guild) {
-      console.log('❌ Guild não encontrada.');
-      return;
-    }
+    if (!guild) return;
 
     const channel = guild.channels.cache.find(c => c.name === '📌-tarefas');
-    if (!channel || !channel.isTextBased()) {
-      console.log('❌ Canal 📌-tarefas não encontrado.');
-      return;
-    }
+    if (!channel || !channel.isTextBased()) return;
 
     const tasks = await fetchMoodleTasks();
     const now = new Date();
 
     for (const task of tasks) {
       const due = new Date(task.dueDate);
-      const diffMs = due - now;
-      const diffHours = diffMs / (1000 * 60 * 60);
+      const diffHours = (due - now) / (1000 * 60 * 60);
 
       if (diffHours <= 24 && diffHours > 0) {
-        const alertKey = `${task.id}-24h`;
+        const key = `${task.id}-24h`;
 
-        if (!sentAlerts.has(alertKey)) {
-          await channel.send({ content: '⏰ Lembrete de atividade', embeds: [createTaskEmbed(task)] });
-          sentAlerts.add(alertKey);
-          console.log(`✅ Alerta enviado para: ${task.title}`);
+        if (!sentAlerts.has(key)) {
+          await channel.send({
+            content: '⏰ Lembrete de atividade',
+            embeds: [createTaskEmbed(task)]
+          });
+
+          sentAlerts.add(key);
         }
       }
     }
-  } catch (error) {
-    console.error('❌ Erro ao verificar prazos:', error);
+  } catch (err) {
+    console.error(err);
   }
 }
 
-client.once(Events.ClientReady, async readyClient => {
-  console.log(`🤖 Online como ${readyClient.user.tag}`);
-  await registerCommands();
+// ================= READY =================
 
+client.once(Events.ClientReady, async () => {
+  console.log(`🤖 Online como ${client.user.tag}`);
+
+  await registerCommands();
   await checkDeadlinesAndNotify(client);
 
   cron.schedule('0 * * * *', async () => {
-    console.log('⏰ Verificando prazos do Moodle...');
+    console.log('⏰ Verificando tarefas...');
     await checkDeadlinesAndNotify(client);
   });
 });
 
+// ================= COMANDOS =================
+
 client.on(Events.InteractionCreate, async interaction => {
   if (!interaction.isChatInputCommand()) return;
+
   try {
+
+    // AJUDA
     if (interaction.commandName === 'ajuda') {
-      await interaction.reply({
+      return interaction.reply({
         ephemeral: true,
-        content: `🤖 **SONIBOT — Ajuda rápida**
-
-📚 **Atividades**
-\`/tarefas\` → mostra as próximas atividades
-\`/hoje\` → mostra o que vence hoje
-\`/semana\` → mostra o que vence nesta semana
-
-📢 **Avisos**
-\`/aviso\` → publica um aviso no canal de anúncios
-
-⚙️ **Sistema**
-\`/ping\` → verifica se o bot está online
-\`/setup\` → cria a estrutura base do servidor
-\`/postar-mensagens\` → envia as mensagens iniciais
-
-💡 Use os comandos em **#⚙️-comandos** para manter o servidor organizado.`});
-      return;
+        content: `📚 /tarefas
+📅 /hoje
+🗓 /semana
+📢 /aviso
+⚙️ /setup`
+      });
     }
 
+    // PING
     if (interaction.commandName === 'ping') {
-      await interaction.reply({
-        content: '🏓 Pong! SONIBOT está online.',
-        ephemeral: true
-      });
-      return;
+      return interaction.reply({ content: '🏓 Pong!', ephemeral: true });
     }
 
-    if (interaction.commandName === 'proxima') {
-      const tasks = await fetchMoodleTasks();
-
-      await interaction.reply({
-        content: '❌ Algo deu errado. Tente novamente ou chame um admin.',
-        ephemeral: true
-      });
-
-      if (!tasks.length) {
-        await interaction.reply('📭 Nenhuma tarefa encontrada.');
-        return;
-      }
-
-      const next = tasks[0];
-
-      await interaction.reply({
-        content: '🚨 Próxima atividade:',
-        embeds: [createTaskEmbed(next)],
-        ephemeral: true
-      });
-    }
-
+    // SETUP
     if (interaction.commandName === 'setup') {
       await interaction.deferReply({ ephemeral: true });
       await setupServer(interaction.guild);
-      await interaction.editReply('✅ Estrutura criada com sucesso.');
-      return;
+      return interaction.editReply('✅ Servidor configurado.');
     }
 
+    // POST
     if (interaction.commandName === 'postar-mensagens') {
       await interaction.deferReply({ ephemeral: true });
       await postInitialMessages(interaction.guild);
-      await interaction.editReply('✅ Mensagens postadas com sucesso.');
-      return;
+      return interaction.editReply('✅ Mensagens enviadas.');
     }
 
+    // TAREFAS
     if (interaction.commandName === 'tarefas') {
       await interaction.deferReply({ ephemeral: true });
 
       const tasks = await fetchMoodleTasks();
 
       if (!tasks.length) {
-        await interaction.editReply('📭 Nenhuma tarefa futura encontrada no Moodle.');
-        return;
+        return interaction.editReply('📭 Nenhuma tarefa.');
       }
 
-      const message = tasks.slice(0, 10).map(formatTask).join('\n\n');
-      await interaction.editReply(message);
-      return;
+      const msg = tasks.slice(0, 10).map(formatTask).join('\n\n');
+      return interaction.editReply(msg);
     }
 
+    // HOJE ✅ CORRIGIDO
     if (interaction.commandName === 'hoje') {
       await interaction.deferReply({ ephemeral: true });
 
-      .filter(item => {
-  const due = new Date(item.dueDate);
-  return due >= new Date(new Date().setHours(0,0,0,0));
-})
+      const tasks = await fetchMoodleTasks();
+      const todayTasks = tasks.filter(t => isToday(t.dueDate));
 
       if (!todayTasks.length) {
-        await interaction.editReply('📭 Nenhuma tarefa vence hoje.');
-        return;
+        return interaction.editReply('📭 Nenhuma tarefa hoje.');
       }
 
-      const embeds = tasks.slice(0, 5).map(task => createTaskEmbed(task));
-      await interaction.editReply({
-        content: '📚 Próximas atividades:', embeds
+      const embeds = todayTasks.slice(0, 5).map(createTaskEmbed);
+
+      return interaction.editReply({
+        content: '📚 Tarefas de hoje:',
+        embeds
       });
     }
 
+    // SEMANA
     if (interaction.commandName === 'semana') {
       await interaction.deferReply({ ephemeral: true });
 
       const tasks = await fetchMoodleTasks();
-      const weekTasks = tasks.filter(task => isThisWeek(task.dueDate));
+      const weekTasks = tasks.filter(t => isThisWeek(t.dueDate));
 
       if (!weekTasks.length) {
-        await interaction.editReply('📭 Nenhuma tarefa vence nesta semana.');
-        return;
+        return interaction.editReply('📭 Nada esta semana.');
       }
 
-      const message = weekTasks.map(formatTask).join('\n\n');
-      await interaction.editReply(message);
-      return;
+      const msg = weekTasks.map(formatTask).join('\n\n');
+      return interaction.editReply(msg);
     }
 
+    // AVISO
     if (interaction.commandName === 'aviso') {
       await interaction.deferReply({ ephemeral: true });
-
-      const allowedRoles = ['Founder', 'Admin', 'Mentor'];
-      const memberRoles = interaction.member.roles.cache.map(role => role.name);
-      const canUse = allowedRoles.some(role => memberRoles.includes(role));
-
-      if (!canUse) {
-        await interaction.editReply('❌ Você não tem permissão para usar este comando.');
-        return;
-      }
 
       const materia = interaction.options.getString('materia');
       const titulo = interaction.options.getString('titulo');
       const mensagem = interaction.options.getString('mensagem');
 
-      const guild = interaction.guild;
-      const announcementChannel = guild.channels.cache.find(
+      const channel = interaction.guild.channels.cache.find(
         c => c.name === '📢-anuncios'
       );
 
-      if (!announcementChannel || !announcementChannel.isTextBased()) {
-        await interaction.editReply('❌ Canal 📢-anuncios não encontrado.');
-        return;
+      if (!channel) {
+        return interaction.editReply('❌ Canal não encontrado.');
       }
 
-      const avisoFormatado = `📢 **Aviso do Professor**
+      await channel.send(`📢 **${titulo}**
+📘 ${materia}
 
-📘 **Matéria:** ${materia}
-📝 **Título:** ${titulo}
+${mensagem}`);
 
-${mensagem}
-
-👤 Enviado por: ${interaction.user}`;
-
-      await announcementChannel.send(avisoFormatado);
-      await interaction.editReply('✅ Aviso publicado com sucesso no canal 📢-anuncios.');
-      return;
+      return interaction.editReply('✅ Aviso enviado.');
     }
-  } catch (error) {
-    console.error('ERRO NO COMANDO:', error);
 
-    try {
-      if (interaction.deferred || interaction.replied) {
-        await interaction.editReply('❌ Ocorreu um erro ao executar o comando.');
-      } else {
-        await interaction.reply({
-          content: '❌ Ocorreu um erro ao executar o comando.',
-          ephemeral: true
-        });
-      }
-    } catch (replyError) {
-      console.error('ERRO AO RESPONDER INTERACTION:', replyError);
+  } catch (err) {
+    console.error(err);
+
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply('❌ Erro.');
+    } else {
+      await interaction.reply({ content: '❌ Erro.', ephemeral: true });
     }
   }
 });
