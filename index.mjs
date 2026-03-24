@@ -35,13 +35,24 @@ const commands = [
   new SlashCommandBuilder().setName('hoje').setDescription('Mostra tarefas de hoje'),
   new SlashCommandBuilder().setName('semana').setDescription('Mostra tarefas da semana'),
 
-  new SlashCommandBuilder()
-    .setName('aviso')
-    .setDescription('Publica um aviso')
-    .addStringOption(o => o.setName('materia').setRequired(true))
-    .addStringOption(o => o.setName('titulo').setRequired(true))
-    .addStringOption(o => o.setName('mensagem').setRequired(true))
-].map(c => c.toJSON());
+new SlashCommandBuilder()
+  .setName('aviso')
+  .setDescription('Publica um aviso')
+  .addStringOption(o =>
+    o.setName('materia')
+     .setDescription('Nome da matéria')
+     .setRequired(true)
+  )
+  .addStringOption(o =>
+    o.setName('titulo')
+     .setDescription('Título do aviso')
+     .setRequired(true)
+  )
+  .addStringOption(o =>
+    o.setName('mensagem')
+     .setDescription('Mensagem do aviso')
+     .setRequired(true)
+  )
 
 async function registerCommands() {
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
