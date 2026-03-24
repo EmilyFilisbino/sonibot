@@ -213,23 +213,36 @@ client.on(Events.InteractionCreate, async interaction => {
     }
 
     // HOJE ✅ CORRIGIDO
-    if (interaction.commandName === 'hoje') {
-      await interaction.deferReply({ ephemeral: true });
+   if (interaction.commandName === 'hoje') {
+  await interaction.deferReply({ ephemeral: true });
 
-      const tasks = await fetchMoodleTasks();
-      const todayTasks = tasks.filter(t => isToday(t.dueDate));
+  const tasks = await fetchMoodleTasks();
 
-      if (!todayTasks.length) {
-        return interaction.editReply('📭 Nenhuma tarefa hoje.');
-      }
+  const todayTasks = tasks.filter(item => {
+    if (!item.dueDate) return false;
 
-      const embeds = todayTasks.slice(0, 5).map(createTaskEmbed);
+    const due = new Date(item.dueDate);
+    const today = new Date();
 
-      return interaction.editReply({
-        content: '📚 Tarefas de hoje:',
-        embeds
-      });
-    }
+    return (
+      due.getDate() === today.getDate() &&
+      due.getMonth() === today.getMonth() &&
+      due.getFullYear() === today.getFullYear()
+    );
+  });
+
+  if (!todayTasks.length) {
+    await interaction.editReply('📭 Nenhuma tarefa vence hoje.');
+    return;
+  }
+
+  const embeds = todayTasks.slice(0, 5).map(task => createTaskEmbed(task));
+
+  await interaction.editReply({
+    content: '📚 Atividades que vencem hoje:',
+    embeds
+  });
+}
 
     // SEMANA
     if (interaction.commandName === 'semana') {
